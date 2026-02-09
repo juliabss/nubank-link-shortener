@@ -1,53 +1,85 @@
 package com.example.nubank.ui.screens.main
 
 import android.util.Patterns
-import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
-class MainViewModel : ViewModel() {
+class MainViewModel(private val nubankApi: NubankApi) : ViewModel() {
 
-    var link = mutableStateOf("")
-        private set
+    // States
+    private val _link = MutableStateFlow("")
+    val link = _link.asStateFlow()
 
-    var history = mutableStateOf<List<ShortenedLink>>(emptyList())
-        private set
+    private val _erro = MutableStateFlow("")
+    val erro = _erro.asStateFlow()
 
+    private val _history = MutableStateFlow<List<ShortenedLink>>(emptyList())
+    val history = _history.asStateFlow()
+
+    // Necessário para o usuário saber se a API está processando
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading = _isLoading.asStateFlow()
+
+    // Actions
     fun onLinkChange(newLink: String) {
-        link.value = newLink
+        _link.update { newLink }
+        if (_erro.value.isNotBlank()) {
+            _erro.update { "" }
+        }
     }
 
-    fun onShortenClick(): LinkResult {
-        val currentLink = link.value.trim()
+    fun onShortenClick() {
+        val currentLink = _link.value.trim()
 
-        return when {
+        when {
             currentLink.isBlank() -> {
-                LinkResult.EmptyFields
+                _erro.update { "Preencha com o link" }
             }
 
             !Patterns.WEB_URL.matcher(currentLink).matches() -> {
-                LinkResult.InvalidLink
+                _erro.update { "Link inválido" }
             }
 
             else -> {
-                val fakeShortUrl = "https://short.ly/${currentLink.hashCode()}"
-
-                history.value = listOf(
-                    ShortenedLink(
-                        originalUrl = currentLink,
-                        shortUrl = fakeShortUrl
-                    )
-                ) + history.value
-
-                link.value = "" // limpa o campo
-
-                LinkResult.Success(currentLink)
+                createRequest(currentLink)
+                _link.update { "" }
             }
         }
     }
-}
 
-sealed class LinkResult {
-    object EmptyFields : LinkResult()
-    object InvalidLink : LinkResult()
-    data class Success(val link: String) : LinkResult()
+    // Private methods
+    private fun createRequest(url: String) {
+        viewModelScope.launch {
+            _isLoading.update { true }
+
+            try {
+                val response = nubankApi.createURL(
+                    CreateNubankRequest(url = url)
+                )
+
+
+                _history.update {
+                    listOf(
+                        ShortenedLink(
+                            originalUrl = url,
+                            shortUrl = response._links.short
+                        )
+                    ) + it
+                }
+
+                _erro.update { "" }
+
+            } catch (e: Exception) {
+                android.util.Log.e("API_ERROR", "Erro completo:", e)
+                _erro.update { "Erro: ${e.message}" }
+
+            } finally {
+                _isLoading.update { false }
+            }
+        }
+    }
 }
